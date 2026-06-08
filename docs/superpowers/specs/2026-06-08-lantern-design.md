@@ -58,7 +58,7 @@ CC-BY-SA 4.0; the app code stays under the repo's own license.
 
 ## Stack & Infra
 
-- **App:** New standalone Next.js app (App Router) in `projects/local`, its own git repo.
+- **App:** New standalone Next.js app (App Router) in `projects/lantern`, its own git repo.
   Tailwind + Radix UI, mirroring 8bitoracle-next conventions. No auth.
 - **Database:** Reuses **8bitoracle-next's existing Supabase project**. Lantern does not
   stand up its own database.
