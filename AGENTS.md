@@ -5,9 +5,11 @@ directory map, and related repos.
 
 ## What this repo is right now
 
-Design/planning for the Lantern app. The app is **not scaffolded yet** — the authoritative
-artifacts are the specs and plans under `docs/superpowers/`. When the app is built, source
-will be added here (App Router Next.js + Tailwind + Radix), but the DB schema will **not**.
+Lantern app — **foundation implemented, panels pending.** The core is built and tested
+(env config, service-role DB client, grounding tables, prompt assembly, AI service, event
+writer). The DB schema (`lantern_*` tables + `ai_provider_requests` columns) is live in
+the shared Supabase project. The remaining UI panels, API routes, and campaign/session
+gate are tracked in a follow-on plan.
 
 ## Authoritative files & boundaries
 
