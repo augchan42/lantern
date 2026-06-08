@@ -8,7 +8,7 @@ describe("grounding tables", () => {
       names: 24, npc_traits: 24, npc_wants: 24, clues_treasure: 24,
     };
     for (const [name, min] of Object.entries(targets)) {
-      const table = (g as Record<string, string[]>)[name];
+      const table = (g as unknown as Record<string, string[]>)[name];
       expect(table, `${name} exists`).toBeTruthy();
       expect(table.length, `${name} >= ${min}`).toBeGreaterThanOrEqual(min);
       expect(table.every((e) => e.trim().length > 0), `${name} no blanks`).toBe(true);
