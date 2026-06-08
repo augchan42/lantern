@@ -27,9 +27,13 @@ app are a **separate follow-on plan** (`platform-db` will already be the place t
 
 ---
 
-### Task 0: Prerequisites & safety backup
+### Task 0: Prerequisites
 
-**Files:** none (environment + backup).
+**Files:** none (environment check).
+
+> The safety backup needs a linked Supabase project directory, which doesn't exist until
+> Task 1 (`supabase init`). So it lives at the start of Task 2, immediately before the
+> baseline — not here.
 
 - [ ] **Step 1: Confirm CLI + project access** `[YOU RUN — LIVE DB]`
 
@@ -40,20 +44,6 @@ supabase login                # interactive; opens browser / pastes token
 supabase projects list        # expect ezlyfsgpcahlnbqgdlxh in the list
 ```
 Expected: the project ref `ezlyfsgpcahlnbqgdlxh` appears and is accessible.
-
-- [ ] **Step 2: Take a schema-only backup of the live DB** `[YOU RUN — LIVE DB]`
-
-Run from a scratch dir (you'll be prompted for the DB password):
-```bash
-mkdir -p ~/platform-db-backups
-supabase db dump --project-ref ezlyfsgpcahlnbqgdlxh --schema-only \
-  -f ~/platform-db-backups/baseline-schema-2026-06-08.sql
-```
-Expected: a non-empty `.sql` file containing `create table` for `critiques`, `leads`,
-`ai_provider_requests`, `site_settings`, and the `ara_*` tables. **Verification gate:** open
-it and confirm `ai_provider_requests` and at least one `ara_*` table are present. If the
-`ara_*` tables are missing, STOP — the baseline assumptions are wrong; investigate where
-ara's schema lives before continuing.
 
 ---
 
@@ -129,7 +119,21 @@ supabase link --project-ref ezlyfsgpcahlnbqgdlxh
 ```
 Expected: "Finished supabase link." `supabase/config.toml` now references the project.
 
-- [ ] **Step 2: Pull the current remote schema into a baseline migration** `[YOU RUN — LIVE DB]`
+- [ ] **Step 2: Take a safety schema backup of the live DB** `[YOU RUN — LIVE DB]`
+
+`supabase db dump` dumps schema only by default (use `--data-only` for the opposite) and
+reads the linked project (`--linked` is the default), so this must run from the linked
+`platform-db/` dir created above. You'll be prompted for the DB password:
+```bash
+mkdir -p ~/platform-db-backups
+supabase db dump -f ~/platform-db-backups/baseline-schema-2026-06-08.sql
+```
+Expected: a non-empty `.sql` containing `create table` for `critiques`, `leads`,
+`ai_provider_requests`, `site_settings`, and the `ara_*` tables. **Verification gate:** open
+it and confirm `ai_provider_requests` and at least one `ara_*` table are present. If the
+`ara_*` tables are missing, STOP — investigate where ara's schema lives before continuing.
+
+- [ ] **Step 3: Pull the current remote schema into a baseline migration** `[YOU RUN — LIVE DB]`
 
 Run:
 ```bash
@@ -140,7 +144,7 @@ current schema (all tables, RPCs, policies). The CLI may warn that remote has mi
 history entries (photocritic's `001`–`004`) not present locally — that is expected and
 handled in Task 3.
 
-- [ ] **Step 3: Verify the baseline equals live (no drift)** `[YOU RUN — LIVE DB]`
+- [ ] **Step 4: Verify the baseline equals live (no drift)** `[YOU RUN — LIVE DB]`
 
 Run:
 ```bash
@@ -151,7 +155,7 @@ production exactly. **Verification gate:** if `db diff` is NOT empty, do not pro
 baseline is incomplete (likely an object `db pull` didn't capture, e.g. an extension or
 edge function). Reconcile before continuing.
 
-- [ ] **Step 4: Commit the baseline**
+- [ ] **Step 5: Commit the baseline**
 
 ```bash
 git add supabase/migrations/
