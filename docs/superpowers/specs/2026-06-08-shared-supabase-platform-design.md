@@ -79,7 +79,9 @@ platform-db/
 ## Canonical Migration Strategy
 
 1. `platform-db`: `supabase init` → `supabase link --project-ref ezlyfsgpcahlnbqgdlxh`.
-2. **Schema-only backup first** (`pg_dump --schema-only`) as a safety net.
+2. **Schema backup first** — from the linked `platform-db` dir, `supabase db dump -f <file>`
+   (schema-only by default) as a safety net. (Single canonical backup workflow; the
+   implementation plan documents the exact command, working dir, and verification.)
 3. **Baseline:** `supabase db pull` → generates a single `<ts>_baseline.sql` reflecting the
    *entire* current remote schema (photocritic tables, `ara_*`, RPCs, policies). Reconcile
    the remote `supabase_migrations.schema_migrations` history with

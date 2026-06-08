@@ -4,12 +4,11 @@
 **Status:** In review (round 2)
 **Tagline:** *a cozy Warden's helper*
 
-> **Depends on** `2026-06-08-shared-supabase-platform-design.md`. The Database / Migrations /
-> AI-logging sections below describe the *interim* shared-DB approach and will be **trimmed
-> to consume the platform** once that spec is approved: `lantern_*` tables become a
-> `platform-db` migration (not photocritic's folder), and `session_id` / cost / tokens log to
-> the platform's new **top-level** `ai_provider_requests` columns (dropping the metadata-jsonb
-> workaround).
+> **Depends on** `2026-06-08-shared-supabase-platform-design.md`. Lantern is a consumer of
+> that platform: its `lantern_*` tables ship as a **`platform-db` migration** (not in any
+> app's repo), and AI calls log to the platform's **top-level** `ai_provider_requests`
+> columns (`session_id`, `total_cost`, `input_tokens`, `output_tokens`, `total_tokens`) —
+> the platform's columns-fix migration adds these, so there is no metadata-jsonb workaround.
 
 ## Purpose
 
@@ -92,16 +91,15 @@ prompt size bounded (only starred entries are injected, not the whole notebook).
 - **Database:** Reuses the **shared Supabase project `ezlyfsgpcahlnbqgdlxh`** used by
   **photocritic-site and ara-eval**. It already holds `ai_provider_requests`, `critiques`,
   `site_settings`, and `ara_*` tables. Lantern does not stand up its own database.
-- **Migrations:** ALL Lantern schema changes live in
-  **`photocritic-site/supabase/migrations/`** (the repo with this project's clean migration
-  history), following its **numeric** convention `00N_*.sql` — next file
-  `005_lantern_tables.sql`. Lantern's code repo holds no migrations.
+- **Migrations:** ALL Lantern schema changes live in the canonical **`platform-db`** repo
+  (`supabase/migrations/`), per the platform spec — a `<ts>_lantern_tables.sql` migration.
+  Lantern's code repo holds no migrations, and no app pushes migrations from its own repo.
 - **Table naming:** every Lantern-owned table is prefixed `lantern_` for clear separation
   from photocritic / ara tables sharing the database.
-- **AI port source:** port from **photocritic-site**, which already targets this DB and
-  image model — `src/lib/ai-provider.ts` (OpenRouter send + failover + logging) and
-  `src/lib/fal-image.ts` (already `fal-ai/z-image/turbo`). 8bitoracle is a secondary
-  reference only.
+- **AI port source:** port from the platform's reference AI service
+  (`platform-db/reference/ai/ai-provider.ts` + `fal-image.ts`), which targets this DB's
+  logging contract and the `fal-ai/z-image/turbo` image model. (That reference is itself
+  derived from photocritic's `src/lib/ai-provider.ts` / `fal-image.ts`.)
 - **Text model:** OpenRouter `deepseek/deepseek-v4-flash` (intended-current). Fall back to
   `deepseek/deepseek-chat-v3.1` if v4-flash isn't yet resolvable at build time. photocritic
   / 8bitoracle model lists may want the same bump.
@@ -115,27 +113,26 @@ prompt size bounded (only starred entries are injected, not the whole notebook).
   **not** in photocritic's committed env (set at runtime); Lantern must provide it
   (`fal-image.ts` reads `FAL_API_KEY || FAL_KEY`).
 
-## AI Layer (ported from photocritic-site)
+## AI Layer (ported from the platform reference service)
 
-- `lanternAiService.sendMessage()` — thin wrapper over photocritic's `ai-provider.ts`:
+- `lanternAiService.sendMessage()` — thin wrapper over the platform's reference
+  `ai-provider.ts`:
   - text → OpenRouter; images → `fal-image.ts` (z-image/turbo); sequential model failover.
   - input: `{ useCase, systemPrompt, question, session_id, aspectRatio? }`.
   - returns `{ text? , imageUrl?, usage, model, provider, request_id }`; for images it
     uploads the fal result to Vercel Blob and returns the **blob URL** (never base64).
-- **Logging** reuses photocritic's `ai_provider_requests` insert. That table's columns are
-  `request_id`, `use_case`, `model`, `model_array`, `response_status`, `error_message`,
-  `raw_request`, `raw_response`, `metadata jsonb` — there are **no** top-level `session_id`,
-  `total_cost`, or token columns. So Lantern logs:
-  - `use_case` + `request_id` as top-level columns (as photocritic does),
-  - `session_id`, token counts, and cost **inside `metadata`** (`metadata.session_id`, etc.).
-
-  Every call (success AND failure) is logged, matching photocritic. **No migration to
-  `ai_provider_requests` is needed.**
+- **Logging** uses the platform's `ai_provider_requests` contract (post columns-fix). Lantern
+  populates the **top-level** columns the platform migration adds — `session_id`,
+  `total_cost`, `input_tokens`, `output_tokens`, `total_tokens` — alongside `use_case`,
+  `request_id`, `model`, `response_status`, etc. (`metadata` jsonb is for anything
+  app-specific only, e.g. attempt timings — never the load-bearing session/cost/token data.)
+  Every call (success AND failure) is logged. The platform's columns-fix migration is a
+  prerequisite; Lantern adds no migration to `ai_provider_requests` itself.
 - **`use_case` values:** `lantern_scene`, `lantern_twist`, `lantern_npc`,
   `lantern_npc_portrait`, `lantern_recap`, `lantern_summary`. Defined as Lantern constants
   (valid strings on the request rows; not added to any other repo's enum).
-- **`session_id`** = the current `lantern_sessions.id`, written into `metadata` so a game
-  session's AI calls group together.
+- **`session_id`** = the current `lantern_sessions.id`, written to the top-level
+  `session_id` column so a game session's AI calls group together.
 
 ## Prompts (representative samples — expand during build)
 
@@ -218,8 +215,9 @@ stone golem*).
 
 ## Persistence (thin Lantern tables)
 
-Five new prefixed tables, migrated in photocritic-site as `005_lantern_tables.sql`.
-Campaign-scoped so people/places survive across sessions. Representative SQL:
+Five new prefixed tables, shipped as a `<ts>_lantern_tables.sql` migration in the
+`platform-db` repo (per the platform spec). Campaign-scoped so people/places survive across
+sessions. Representative SQL:
 
 ```sql
 create table if not exists lantern_campaigns (
@@ -378,8 +376,8 @@ memory + grounding rolls + task + Warden note) → `lanternAiService.sendMessage
    **session** under it → POST `/api/lantern/session` → hold `session_id`. Both cached in
    `localStorage`.
 2. Each AI generation: route injects campaign memory, calls
-   `lanternAiService.sendMessage()` with the right `use_case` + `session_id` (in
-   `metadata`); raw call auto-logged to `ai_provider_requests`; a clean summary written to
+   `lanternAiService.sendMessage()` with the right `use_case` + `session_id` (top-level
+   column); raw call auto-logged to `ai_provider_requests`; a clean summary written to
    `lantern_events`.
 3. NPC portrait fires async after NPC text returns; on success, persists `portrait_url` if
    the NPC was ⭐-remembered.
@@ -404,8 +402,8 @@ memory + grounding rolls + task + Warden note) → `lanternAiService.sendMessage
   `lantern_events` summary shaping; scuffle math (die − armor, 0 HP = out, never below 0).
 - Integration: campaign lifecycle (create campaign → session → generate scene → log event
   → star an NPC → recap reads it back → summarize folds it into campaign.summary) against a
-  test Supabase or mocked admin client. Verify `session_id` lands in `metadata`, not a
-  top-level column.
+  test Supabase or mocked admin client. Verify `session_id` and token/cost values land in
+  their top-level `ai_provider_requests` columns (not buried in `metadata`).
 - Manual play-test checklist (one real session before relying on it at the table): scene
   reads naturally aloud and uses a remembered thread; twist lands as concrete content; NPC
   text returns instantly with portrait arriving later; notebook starring changes later
@@ -420,9 +418,8 @@ memory + grounding rolls + task + Warden note) → `lanternAiService.sendMessage
   env).
 - **Cairn attribution:** confirm CC-BY-SA wording and which exact Cairn 2e tables seed the
   initial grounding set.
-- **RLS:** confirm the `lantern_*` RLS policy against photocritic's current convention
-  before writing `005_lantern_tables.sql`; coordinate the migration with photocritic-site's
-  owner since it lands in that repo.
-- **Migration ownership:** since `005_lantern_tables.sql` lives in photocritic-site, decide
-  how Lantern applies/tracks it (PR to photocritic-site vs. direct `supabase db push`).
+- **RLS:** confirm the `lantern_*` RLS policy against the platform's convention before
+  writing the `<ts>_lantern_tables.sql` migration in `platform-db`.
+- **Sequencing:** the Lantern tables migration depends on the platform foundation
+  (baseline + columns fix) landing first; track it as the follow-on to the platform-db plan.
 ```
