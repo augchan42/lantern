@@ -20,7 +20,7 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return fail("id is required");
-  const { data, error } = await supabaseAdmin().from("lantern_campaigns").select("*").eq("id", id).single();
+  const { data, error } = await supabaseAdmin().from("lantern_campaigns").select("*").eq("id", id).maybeSingle();
   if (error) return fail(error.message, 500);
   if (!data) return fail("campaign not found", 404);
   return ok(data);

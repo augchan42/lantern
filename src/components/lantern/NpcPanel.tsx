@@ -38,12 +38,14 @@ export function NpcPanel({ campaignId, sessionId }: { campaignId: string; sessio
 
   async function remember() {
     if (!npc) return;
-    const row = await postJson<{ id: string }>("/api/lantern/npcs", {
-      campaignId, sessionId, name: npc.name, trait: npc.trait, want: npc.want,
-      voice_hint: npc.voice_hint, portrait_url: portrait, starred: true,
-    });
-    if (portrait) patched.current = true; // portrait was saved by the insert
-    setRememberedId(row.id);
+    try {
+      const row = await postJson<{ id: string }>("/api/lantern/npcs", {
+        campaignId, sessionId, name: npc.name, trait: npc.trait, want: npc.want,
+        voice_hint: npc.voice_hint, portrait_url: portrait, starred: true,
+      });
+      if (portrait) patched.current = true; // portrait was saved by the insert
+      setRememberedId(row.id);
+    } catch (e) { setError((e as Error).message); }
   }
 
   // Reconcile: if the portrait lands *after* Remember, attach it to the saved row exactly once.

@@ -16,18 +16,21 @@ export function SessionBar(props: {
   const { campaign, sessionId, onCampaign, onSession, onEditMemory } = props;
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function createCampaign() {
     setBusy(true);
     try {
       const c = await postJson<Campaign>("/api/lantern/campaign", { title: title || "The Wood", tone: "gentle" });
       onCampaign(c);
-    } finally { setBusy(false); }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   async function setTone(tone: Tone) {
     if (!campaign) return;
-    const c = await patchJson<Campaign>("/api/lantern/campaign", { id: campaign.id, tone });
-    onCampaign(c);
+    try {
+      const c = await patchJson<Campaign>("/api/lantern/campaign", { id: campaign.id, tone });
+      onCampaign(c);
+    } catch (e) { setError((e as Error).message); }
   }
   async function startSession() {
     if (!campaign) return;
@@ -35,12 +38,14 @@ export function SessionBar(props: {
     try {
       const s = await postJson<Session>("/api/lantern/session", { campaignId: campaign.id });
       onSession(s.id);
-    } finally { setBusy(false); }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   async function endSession() {
     if (!sessionId) return;
-    await patchJson<Session>("/api/lantern/session", { id: sessionId, status: "ended" });
-    onSession(null);
+    try {
+      await patchJson<Session>("/api/lantern/session", { id: sessionId, status: "ended" });
+      onSession(null);
+    } catch (e) { setError((e as Error).message); }
   }
 
   if (!campaign) {
@@ -82,6 +87,7 @@ export function SessionBar(props: {
         </button>
       )}
       <button onClick={onEditMemory} className="ml-auto rounded border border-amber-900/30 px-2 py-0.5">Edit Memory</button>
+      {error && <span className="text-red-700">{error}</span>}
     </header>
   );
 }

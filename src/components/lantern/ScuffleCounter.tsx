@@ -4,10 +4,9 @@ import { isOut, nextTurn, type Combatant } from "@/lib/scuffle";
 import { soft_monsters, roll } from "@/grounding";
 import { getJson, postJson } from "@/lib/client/api";
 
-let nextId = 0;
 function spawn(): Combatant {
   const m = roll(soft_monsters);
-  return { id: `m${nextId++}`, name: m.name, hp: m.hp, armor: m.armor };
+  return { id: crypto.randomUUID(), name: m.name, hp: m.hp, armor: m.armor };
 }
 
 interface ScuffleState { combatants: Combatant[]; turn: number }
@@ -43,6 +42,8 @@ export function ScuffleCounter({ sessionId }: { sessionId: string }) {
   useEffect(() => { if (hydrated.current) persist(foes, turn); }, [foes, turn, persist]);
 
   function add() { setFoes((f) => [...f, spawn()]); }
+  // Manual HP adjust (Warden rolls real dice). The spec's die-minus-armor math lives in
+  // src/lib/scuffle.ts (applyDamage) for future use; the counter only tracks HP here.
   function bump(id: string, amount: number) {
     setFoes((f) => f.map((c) => (c.id === id ? { ...c, hp: Math.max(0, c.hp + amount) } : c)));
   }
