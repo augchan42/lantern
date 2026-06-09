@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const { sendMessage, writeEvent, assembleContext } = vi.hoisted(() => ({
-  sendMessage: vi.fn(async () => ({ text: "A misty glade.", model: "m", provider: "p", requestId: "r1" })),
+  sendMessage: vi.fn(async (_input?: unknown) => ({ text: "A misty glade.", model: "m", provider: "p", requestId: "r1" })),
   writeEvent: vi.fn(async () => undefined),
   assembleContext: vi.fn(async () => ({
     campaign: { id: "c1", title: null, tone: "gentle", summary: "", status: "active" },

@@ -707,11 +707,15 @@ Create `src/app/api/lantern/scene/route.test.ts`:
 ```ts
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const sendMessage = vi.fn(async () => ({ text: "A misty glade.", model: "m", provider: "p", requestId: "r1" }));
-const writeEvent = vi.fn(async () => undefined);
-const assembleContext = vi.fn(async () => ({
-  campaign: { id: "c1", title: null, tone: "gentle", summary: "", status: "active" },
-  systemPrompt: "SYS",
+// vi.hoisted() so the mock fns exist before the hoisted vi.mock() factories run (avoids TDZ).
+// sendMessage takes a typed arg so `.mock.calls[0][0]` type-checks under `tsc`.
+const { sendMessage, writeEvent, assembleContext } = vi.hoisted(() => ({
+  sendMessage: vi.fn(async (_input?: unknown) => ({ text: "A misty glade.", model: "m", provider: "p", requestId: "r1" })),
+  writeEvent: vi.fn(async () => undefined),
+  assembleContext: vi.fn(async () => ({
+    campaign: { id: "c1", title: null, tone: "gentle", summary: "", status: "active" },
+    systemPrompt: "SYS",
+  })),
 }));
 vi.mock("@/services/lanternAiService", () => ({ lanternAiService: { sendMessage } }));
 vi.mock("@/lib/lanternEvents", () => ({ writeEvent }));
