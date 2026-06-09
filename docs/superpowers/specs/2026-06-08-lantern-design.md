@@ -1,7 +1,7 @@
 # Lantern — Design Spec
 
 **Date:** 2026-06-08
-**Status:** In review (round 2)
+**Status:** Approved — panels plan ready; 2026-06-09 decisions (middleware auth, backup model, scuffle persistence, async-portrait redesign) folded in
 **Tagline:** *a cozy Warden's helper*
 
 > **Depends on** `2026-06-08-shared-supabase-platform-design.md`. Lantern is a consumer of
@@ -26,7 +26,8 @@ campaign about recurring people and consequences, with quick inspiration on tap.
 Non-goals (explicitly out of scope for v1):
 - No VTT, maps, grids, or token movement.
 - No player-facing UI; only the Warden touches the app.
-- No auth / multi-user / accounts (single operator at the table).
+- No multi-user / accounts (single operator at the table) — but a single shared password
+  (middleware gate) protects the public deployment; there is no per-user identity.
 - No AI narration read verbatim to kids — output is raw material for the Warden.
 - No character sheets / advancement / inventory (kids' sheets stay on paper).
 - No full combat engine — only a tiny ephemeral scuffle counter (real combat is paper).
@@ -87,7 +88,10 @@ prompt size bounded (only starred entries are injected, not the whole notebook).
 ## Stack & Infra
 
 - **App:** New standalone Next.js app (App Router) in `projects/lantern`, its own git repo.
-  Tailwind + Radix UI, mirroring photocritic-site / 8bitoracle conventions. No auth.
+  Tailwind + Radix UI, mirroring photocritic-site / 8bitoracle conventions. No per-user
+  auth; a single-password Next.js **middleware gate** (`LANTERN_PASSWORD` → signed httpOnly
+  cookie) protects the public Vercel URL, covering the page and every `/api/lantern/*`
+  route (they sit in front of the service-role key).
 - **Database:** Reuses the **shared Supabase project `ezlyfsgpcahlnbqgdlxh`** used by
   **photocritic-site and ara-eval**. It already holds `ai_provider_requests`, `critiques`,
   `site_settings`, and `ara_*` tables. Lantern does not stand up its own database.
@@ -101,8 +105,9 @@ prompt size bounded (only starred entries are injected, not the whole notebook).
   logging contract and the `fal-ai/z-image/turbo` image model. (That reference is itself
   derived from photocritic's `src/lib/ai-provider.ts` / `fal-image.ts`.)
 - **Text model:** OpenRouter `deepseek/deepseek-v4-flash` (intended-current). Fall back to
-  `deepseek/deepseek-chat-v3.1` if v4-flash isn't yet resolvable at build time. photocritic
-  / 8bitoracle model lists may want the same bump.
+  `google/gemini-2.5-flash-lite` if v4-flash isn't resolvable (decided 2026-06-09). Output
+  is plain text + loose JSON tolerated by `parseModelJson`, so the cross-provider failover
+  is safe. photocritic / 8bitoracle model lists may want the same bump.
 - **Image model:** fal.ai `fal-ai/z-image/turbo` (confirmed; already the constant in
   photocritic's `fal-image.ts`).
 - **Image storage:** generated images go to Vercel Blob; only the blob URL is stored
@@ -111,7 +116,8 @@ prompt size bounded (only starred entries are injected, not the whole notebook).
   `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
   `OPENROUTER_API_KEY`, `BLOB_READ_WRITE_TOKEN`, **and `FAL_API_KEY`** — the latter is
   **not** in photocritic's committed env (set at runtime); Lantern must provide it
-  (`fal-image.ts` reads `FAL_API_KEY || FAL_KEY`).
+  (`fal-image.ts` reads `FAL_API_KEY || FAL_KEY`). Plus **`LANTERN_PASSWORD`** — the single
+  shared password for the middleware gate (Lantern's own, not from photocritic).
 
 ## AI Layer (ported from the platform reference service)
 
@@ -194,8 +200,12 @@ and tension, but still never lethal."*
 
 ## Grounding Tables (authored as static data)
 
-Static TS in the Lantern repo (NOT database tables), seeded by adapting Cairn 2e's open
-tables plus kid-soft additions, injected into prompts so output stays on-theme.
+Static TS in the Lantern repo (NOT database tables — "tables" here is in the tabletop
+**dice-roll oracle** sense). Each is a curated list of on-theme bits (places, omens, hooks,
+complications, names, traits, wants, treasures, soft monsters), seeded by adapting Cairn
+2e's open oracle tables plus kid-soft additions. Before each generation the app *rolls* a
+few at random and injects them into the prompt, so output riffs on concrete, curated
+specifics instead of generic LLM defaults.
 
 **Format** — each is `export const <name>: string[]` in `src/grounding/<name>.ts`,
 re-exported from `src/grounding/index.ts`, with `roll<Name>()` / `rollN(table, n)` helpers
@@ -215,9 +225,10 @@ stone golem*).
 
 ## Persistence (thin Lantern tables)
 
-Five new prefixed tables, shipped as a `<ts>_lantern_tables.sql` migration in the
-`platform-db` repo (per the platform spec). Campaign-scoped so people/places survive across
-sessions. Representative SQL:
+Six prefixed tables. The original five shipped as `<ts>_lantern_tables.sql` (already live);
+the sixth, `lantern_scuffles`, ships as a follow-on `<ts>_lantern_scuffles.sql` migration in
+the `platform-db` repo (per the platform spec). Campaign-scoped so people/places survive
+across sessions. Representative SQL:
 
 ```sql
 create table if not exists lantern_campaigns (
@@ -271,17 +282,28 @@ create table if not exists lantern_events (            -- chronological log → 
   payload        jsonb,
   ai_request_id  text       -- mirrors photocritic's critiques.ai_request_id → ai_provider_requests.request_id
 );
+create table if not exists lantern_scuffles (           -- persisted scuffle-counter state
+  id           uuid primary key default gen_random_uuid(),
+  session_id   uuid not null unique references lantern_sessions(id) on delete cascade,
+  combatants   jsonb not null default '[]',   -- [{ id, name, hp, armor }]
+  turn         int not null default 0,
+  updated_at   timestamptz not null default now()
+);
 create index on lantern_sessions (campaign_id, created_at);
 create index on lantern_npcs (campaign_id);
 create index on lantern_threads (campaign_id, kind);
 create index on lantern_events (session_id, created_at);
+create index on lantern_scuffles (session_id);
 ```
 
 RLS: follow photocritic's convention for these single-operator tables — RLS enabled, no
 public client access; writes go through the service-role admin client used for logging.
 
-**Scuffle counter state is local React state only** — not persisted (a scuffle is
-ephemeral; HP and turn order live only in the panel).
+**Scuffle counter state persists** via a write-through cache: localStorage
+(`lantern.scuffle.<sessionId>`) for instant, offline-safe resume, mirrored (debounced) to a
+`lantern_scuffles` row for durability. On load the DB row is the source of truth and
+localStorage covers the gap between syncs, so HP and turn order survive a refresh or a
+device handoff.
 
 ## The Panels (single screen, campaign + session scoped)
 
@@ -316,9 +338,14 @@ refresh resumes). Below it a responsive 2×2 grid (stacks to 1 column on narrow 
    Warden note + memory. Each logs a `lantern_events` row.
 2. **NPC generator** (`NpcPanel`) — name + trait + want (`lantern_npc`) returns **text
    immediately**; the portrait (`lantern_npc_portrait`) is fired **asynchronously** and
-   fills in when ready (often 20–40s) so the table never stalls. A **⭐ Remember** button
-   promotes the NPC to a persisted `lantern_npcs` row (People thread). Logs a
-   `lantern_events` row of kind `npc`.
+   fills in when ready (often 20–40s) so the table never stalls. The portrait flow is
+   **order-independent**: the portrait route takes an optional `npcId` — if the NPC is
+   already remembered the server writes `portrait_url` onto that row, otherwise it returns
+   the blob URL for the client to hold. **⭐ Remember** promotes the NPC to a persisted
+   `lantern_npcs` row immediately with whatever's ready; a client reconciliation step
+   attaches the portrait whenever it lands (in either order), and a "retry portrait"
+   re-fires with the `npcId` to self-heal a failure. Logs a `lantern_events` row of kind
+   `npc`.
 3. **Notes & Threads + scuffle counter** (`NotebookPanel`) — tabbed People / Places /
    Problems / Treasures / Notes over `lantern_npcs` + `lantern_threads`: add, edit, ⭐ star
    (starred entries feed every prompt). Includes a **tiny local scuffle counter** — a few
@@ -342,18 +369,23 @@ are client components that POST to them. The service-role Supabase client handle
 
 ```
 src/
+  middleware.ts                       # password gate: LANTERN_PASSWORD cookie over page + /api
   app/
+    login/page.tsx                    # password form (posts to /api/login)
     page.tsx                          # campaign/session gate + 2×2 panel grid
-    api/lantern/
-      campaign/route.ts               # POST create, PATCH (summary/tone/end)
-      session/route.ts                # POST create, PATCH end
-      scene/route.ts                  # POST → lantern_scene (+ log event)
-      twist/route.ts                  # POST → lantern_twist (+ log event)
-      npc/route.ts                    # POST → lantern_npc (text);  ?portrait → fal call
-      npcs/route.ts                   # GET/POST/PATCH lantern_npcs (star, persist, edit)
-      threads/route.ts                # GET/POST/PATCH lantern_threads
-      recap/route.ts                  # POST → reads events, lantern_recap (+ log)
-      summary/route.ts                # POST → lantern_summary AI-assist
+    api/
+      login/route.ts                  # POST sets the signed httpOnly gate cookie
+      lantern/
+        campaign/route.ts             # GET by id; POST create, PATCH (summary/tone/end)
+        session/route.ts              # POST create, PATCH end
+        scene/route.ts                # POST → lantern_scene (+ log event)
+        twist/route.ts                # POST → lantern_twist (+ log event)
+        npc/route.ts                  # POST → lantern_npc (text); ?portrait[&npcId] → fal call
+        npcs/route.ts                 # GET/POST/PATCH lantern_npcs (star, persist, edit)
+        threads/route.ts              # GET/POST/PATCH lantern_threads
+        scuffle/route.ts              # GET + POST upsert lantern_scuffles (combat state)
+        recap/route.ts                # POST → reads events, lantern_recap (+ log)
+        summary/route.ts              # POST → lantern_summary AI-assist
   components/lantern/
     SessionBar.tsx  ScenePanel.tsx  NpcPanel.tsx  NotebookPanel.tsx  RecapPanel.tsx
     MemoryEditor.tsx  ScuffleCounter.tsx
@@ -364,6 +396,9 @@ src/
     supabaseAdmin.ts                  # service-role client
     memory.ts                         # buildMemoryBlock(campaign): summary + starred threads
     lanternEvents.ts                  # writeEvent({session_id, kind, summary, payload, ai_request_id})
+    campaignRepo.ts                   # getCampaign / assembleContext / recentEventSummaries
+    apiHelpers.ts  parseModelJson.ts  scuffle.ts   # route helpers; tolerant JSON; scuffle math
+    client/api.ts  client/useCampaignSession.ts    # fetch wrappers; localStorage gate for ids
 ```
 
 Each AI route: validate body → `buildMemoryBlock(campaign)` → assemble prompt (system +
@@ -379,8 +414,9 @@ memory + grounding rolls + task + Warden note) → `lanternAiService.sendMessage
    `lanternAiService.sendMessage()` with the right `use_case` + `session_id` (top-level
    column); raw call auto-logged to `ai_provider_requests`; a clean summary written to
    `lantern_events`.
-3. NPC portrait fires async after NPC text returns; on success, persists `portrait_url` if
-   the NPC was ⭐-remembered.
+3. NPC portrait fires async after NPC text returns; the result converges onto the NPC row in
+   either order — if already ⭐-remembered the server writes `portrait_url` by `npcId`, else
+   the client holds the URL and a reconciliation step attaches it once the row exists.
 4. Recap reads `lantern_events` where `session_id = current`. "Summarize recent events"
    updates `lantern_campaigns.summary` (Warden reviews before save).
 5. End session → PATCH status `ended`; campaign stays active for the next night.
@@ -412,14 +448,19 @@ memory + grounding rolls + task + Warden note) → `lanternAiService.sendMessage
 ## Open Items
 
 - **Text model:** confirm `deepseek/deepseek-v4-flash` resolves on OpenRouter at build
-  time; else fall back to `deepseek/deepseek-chat-v3.1`. Consider bumping photocritic /
-  8bitoracle model lists too.
-- **FAL key:** ensure `FAL_API_KEY` is set for Lantern (absent from photocritic's committed
-  env).
+  time; fallback is `google/gemini-2.5-flash-lite` (decided 2026-06-09). Consider bumping
+  photocritic / 8bitoracle model lists too.
+- **FAL key:** ✅ set in Lantern's env (was absent from photocritic's committed env).
+- **Auth:** ✅ single-password Next.js middleware gate (`LANTERN_PASSWORD` → signed httpOnly
+  cookie) over the page and all `/api/lantern/*` routes — the public Vercel URL fronts the
+  service-role key, so the gate must cover the API surface too.
 - **Cairn attribution:** confirm CC-BY-SA wording and which exact Cairn 2e tables seed the
   initial grounding set.
-- **RLS:** confirm the `lantern_*` RLS policy against the platform's convention before
-  writing the `<ts>_lantern_tables.sql` migration in `platform-db`.
+- **RLS:** the `lantern_*` tables (incl. the new `lantern_scuffles`) follow the
+  single-operator RLS-enabled-no-policies convention; confirm before writing migrations.
+- **Scuffle persistence:** `lantern_scuffles` ships as a follow-on `<ts>_lantern_scuffles.sql`
+  migration in `platform-db` that must be pushed (operator auth) before the scuffle route
+  goes live.
 - **Sequencing:** the Lantern tables migration depends on the platform foundation
   (baseline + columns fix) landing first; track it as the follow-on to the platform-db plan.
 ```

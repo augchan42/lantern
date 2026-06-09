@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the Lantern UI — the campaign/session gate, the four panels (Scene+Twist, NPC, Notebook+Scuffle, Recap), the memory editor, and the `/api/lantern/*` route handlers that wire them to the already-built AI service, grounding tables, prompt assembly, and `lantern_*` tables.
+**Goal:** Build the Lantern UI — a single-password middleware gate, the campaign/session gate, the four panels (Scene+Twist, NPC, Notebook+Scuffle, Recap), the memory editor, and the `/api/lantern/*` route handlers that wire them to the already-built AI service, grounding tables, prompt assembly, and `lantern_*` tables. The scuffle counter persists via localStorage + a new `lantern_scuffles` row.
+
+> **2026-06-09 decisions folded in:** middleware password gate over page + API (Task B); text-model fallback → `google/gemini-2.5-flash-lite` (Task A); scuffle persistence localStorage **and** DB (Tasks C, 10, 14, plus the scuffle route); order-independent async portrait (Task 6). Run Tasks A–C before the panel tasks.
 
 **Architecture:** Server-side AI + DB calls live in Next.js App Router **Route Handlers** (`src/app/api/lantern/*`); panels are client components that POST to them. Each AI route loads campaign memory → assembles `system + memory + grounding rolls + task` → calls `lanternAiService.sendMessage()` → writes a `lantern_events` row with the returned `request_id`. All `lantern_*` reads/writes go through the service-role `supabaseAdmin()` client. Campaign/session ids live in `localStorage` so a refresh resumes. The scuffle counter is local React state only (never persisted).
 
@@ -48,6 +50,236 @@
 
 **New docs**
 - `CREDITS.md` — Cairn 2e CC-BY-SA attribution.
+
+**New auth / persistence files (2026-06-09 decisions)**
+- `src/middleware.ts`, `src/app/login/page.tsx`, `src/app/api/login/route.ts` — password gate.
+- `src/app/api/lantern/scuffle/route.ts` — GET + upsert `lantern_scuffles`.
+- `../platform-db/supabase/migrations/<ts>_lantern_scuffles.sql` — the scuffle table (gated push).
+
+---
+
+### Task A: Backup text-model fallback (foundation tweak)
+
+**Files:**
+- Modify: `src/services/openrouter.ts:13-16`
+
+- [ ] **Step 1: Change the fallback model**
+
+In `src/services/openrouter.ts`, the `DEFAULT_MODELS` array is:
+```ts
+const DEFAULT_MODELS = [
+  "deepseek/deepseek-v4-flash",
+  "deepseek/deepseek-chat-v3.1",
+];
+```
+Change the second entry so it reads:
+```ts
+const DEFAULT_MODELS = [
+  "deepseek/deepseek-v4-flash",
+  "google/gemini-2.5-flash-lite",
+];
+```
+(Primary unchanged; only the failover model changes.)
+
+- [ ] **Step 2: Verify the suite still passes**
+
+Run: `npm test`
+Expected: all existing suites PASS (the routing test mocks the caller, so the model-list change is non-breaking).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/services/openrouter.ts
+git commit -m "feat: use google/gemini-2.5-flash-lite as text-model fallback"
+```
+
+---
+
+### Task B: Single-password middleware gate
+
+**Files:**
+- Create: `src/middleware.ts`
+- Create: `src/app/login/page.tsx`
+- Create: `src/app/api/login/route.ts`
+- Modify: `.env.local.example` (add `LANTERN_PASSWORD=`)
+
+> Threat model: single operator, single shared password, public HTTPS URL. The httpOnly
+> cookie holds the password and the middleware compares it to `LANTERN_PASSWORD` — a
+> deliberate simplification (no per-user identity, no session store). It must cover the
+> `/api/*` routes because they front the service-role key.
+
+- [ ] **Step 1: Add the env var to the example file**
+
+Append to `.env.local.example`:
+```
+# Single shared password for the middleware auth gate
+LANTERN_PASSWORD=
+```
+Then set a real value in `.env.local` (not committed).
+
+- [ ] **Step 2: Implement the middleware**
+
+Create `src/middleware.ts`:
+```ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+const COOKIE = "lantern_auth";
+
+export function middleware(req: NextRequest) {
+  const { pathname } = req.nextUrl;
+  // Let the login page + its endpoint through (everything else is gated).
+  if (pathname.startsWith("/login") || pathname.startsWith("/api/login")) {
+    return NextResponse.next();
+  }
+  const token = req.cookies.get(COOKIE)?.value;
+  if (token && token === process.env.LANTERN_PASSWORD) return NextResponse.next();
+
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const url = req.nextUrl.clone();
+  url.pathname = "/login";
+  return NextResponse.redirect(url);
+}
+
+// Run on everything except Next internals + static assets.
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+};
+```
+
+- [ ] **Step 3: Implement the login endpoint**
+
+Create `src/app/api/login/route.ts`:
+```ts
+export const runtime = "nodejs";
+import { NextResponse } from "next/server";
+
+const COOKIE = "lantern_auth";
+
+export async function POST(req: Request) {
+  const { password } = (await req.json()) as { password?: string };
+  if (!password || password !== process.env.LANTERN_PASSWORD) {
+    return NextResponse.json({ error: "wrong password" }, { status: 401 });
+  }
+  const res = NextResponse.json({ ok: true });
+  res.cookies.set(COOKIE, password, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30, // 30 days
+  });
+  return res;
+}
+```
+
+- [ ] **Step 4: Implement the login page**
+
+Create `src/app/login/page.tsx`:
+```tsx
+"use client";
+import { useState, type FormEvent } from "react";
+
+export default function Login() {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (res.ok) window.location.href = "/";
+    else setError("Wrong password");
+  }
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-amber-50/30">
+      <form onSubmit={submit} className="w-72 space-y-2 rounded-lg border border-amber-900/15 bg-white p-4">
+        <h1 className="text-lg">🏮 Lantern</h1>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Password"
+          autoFocus
+          className="w-full rounded border border-amber-900/30 px-2 py-1"
+        />
+        <button className="w-full rounded bg-amber-700 px-3 py-1 text-white">Enter</button>
+        {error && <p className="text-sm text-red-700">{error}</p>}
+      </form>
+    </main>
+  );
+}
+```
+
+- [ ] **Step 5: Manually verify the gate**
+
+Run: `npm run dev`, open `http://localhost:3000` → expect redirect to `/login`. Wrong
+password → "Wrong password"; right one → land on the panels. Confirm
+`curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000/api/lantern/npcs?campaignId=x"`
+returns `401` without the cookie.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/middleware.ts src/app/login src/app/api/login .env.local.example
+git commit -m "feat: single-password middleware auth gate over page + api"
+```
+
+---
+
+### Task C: `lantern_scuffles` migration (platform-db — GATED)
+
+**Files:**
+- Create: `../platform-db/supabase/migrations/<ts>_lantern_scuffles.sql`
+
+> **This is a production schema change on the shared Supabase project.** Per repo rules the
+> agent **authors** the migration in `platform-db`; the **operator pushes it** (`supabase db
+> push`, operator auth) and verifies with `supabase db diff`. The scuffle route (Task D) and
+> the DB half of Task 14 stay blocked until this is live. The localStorage half works without it.
+
+- [ ] **Step 1: Author the migration in platform-db**
+
+Create `../platform-db/supabase/migrations/<ts>_lantern_scuffles.sql` (timestamp after the
+existing `20260608151700_lantern_tables.sql`, e.g. `20260609120000_lantern_scuffles.sql`):
+```sql
+-- lantern_scuffles: persisted scuffle-counter state (one row per session, upserted).
+-- Single-operator: RLS enabled with no policies; only the service-role client reaches it.
+create table if not exists "public"."lantern_scuffles" (
+  "id"          uuid primary key default gen_random_uuid(),
+  "session_id"  uuid not null unique references "public"."lantern_sessions"("id") on delete cascade,
+  "combatants"  jsonb not null default '[]'::jsonb,   -- [{ id, name, hp, armor }]
+  "turn"        integer not null default 0,
+  "updated_at"  timestamptz not null default now()
+);
+create index if not exists "idx_lantern_scuffles_session" on "public"."lantern_scuffles" ("session_id");
+alter table "public"."lantern_scuffles" enable row level security;
+```
+
+- [ ] **Step 2: Operator pushes + verifies (GATED — not run by the agent)**
+
+From the `platform-db` repo (requires operator auth):
+```bash
+supabase db push
+supabase db diff   # expect: no diff after push (table present)
+```
+Then confirm via REST (service-role), expecting HTTP 200 + `[]`:
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' "$URL/rest/v1/lantern_scuffles?select=*&limit=1" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
+```
+
+- [ ] **Step 3: Commit the migration (in platform-db)**
+
+```bash
+# in ../platform-db
+git add supabase/migrations/<ts>_lantern_scuffles.sql
+git commit -m "feat: lantern_scuffles table (persisted scuffle counter)"
+```
 
 ---
 
@@ -701,15 +933,17 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const sendMessage = vi.fn();
 const writeEvent = vi.fn(async () => undefined);
+const npcUpdate = vi.fn(() => ({ eq: async () => ({ error: null }) }));
 vi.mock("@/services/lanternAiService", () => ({ lanternAiService: { sendMessage } }));
 vi.mock("@/lib/lanternEvents", () => ({ writeEvent }));
+vi.mock("@/lib/supabaseAdmin", () => ({ supabaseAdmin: () => ({ from: () => ({ update: npcUpdate }) }) }));
 vi.mock("@/lib/campaignRepo", () => ({
   assembleContext: async () => ({ campaign: { tone: "gentle" }, systemPrompt: "SYS" }),
 }));
 
 import { POST } from "./route";
 
-beforeEach(() => { sendMessage.mockReset(); writeEvent.mockClear(); });
+beforeEach(() => { sendMessage.mockReset(); writeEvent.mockClear(); npcUpdate.mockClear(); });
 function post(url: string, body: unknown) {
   return POST(new Request(url, { method: "POST", body: JSON.stringify(body) }));
 }
@@ -736,6 +970,13 @@ describe("npc route", () => {
     expect(sendMessage.mock.calls[0][0]).toMatchObject({ useCase: "lantern_npc_portrait", aspectRatio: "1:1" });
     expect(writeEvent).not.toHaveBeenCalled(); // portrait does not write an event row
   });
+
+  it("?portrait=1 with npcId writes portrait_url onto the row", async () => {
+    sendMessage.mockResolvedValue({ imageUrl: "https://blob/y.png", requestId: "r3", model: "z", provider: "fal.ai" });
+    const res = await post("http://t/api/lantern/npc?portrait=1", { sessionId: "s1", portraitPrompt: "x", npcId: "n9" });
+    expect(res.status).toBe(200);
+    expect(npcUpdate).toHaveBeenCalledWith({ portrait_url: "https://blob/y.png" });
+  });
 });
 ```
 
@@ -751,6 +992,7 @@ Create `src/app/api/lantern/npc/route.ts`:
 export const runtime = "nodejs";
 
 import { ok, fail, readBody } from "@/lib/apiHelpers";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { assembleContext } from "@/lib/campaignRepo";
 import { lanternAiService } from "@/services/lanternAiService";
 import { writeEvent } from "@/lib/lanternEvents";
@@ -761,7 +1003,7 @@ import { parseModelJson } from "@/lib/parseModelJson";
 
 const PORTRAIT_STYLE = "storybook illustration, soft warm colors, friendly, no text";
 
-interface NpcBody { campaignId?: string; sessionId?: string; portraitPrompt?: string }
+interface NpcBody { campaignId?: string; sessionId?: string; portraitPrompt?: string; npcId?: string }
 interface Npc { name: string; trait: string; want: string; voice_hint: string; portrait_prompt: string }
 
 export async function POST(req: Request) {
@@ -769,7 +1011,9 @@ export async function POST(req: Request) {
   const body = await readBody<NpcBody>(req);
   if (!body.sessionId) return fail("sessionId is required");
 
-  // Image branch: fire-and-return the portrait blob URL. No event row (portrait is a facet of the NPC).
+  // Image branch: generate the portrait blob URL (no event row — portrait is a facet of the NPC).
+  // Order-independent: if the NPC is already remembered (npcId given), write portrait_url onto
+  // that row server-side; otherwise return the URL for the client to hold and reconcile later.
   if (isPortrait) {
     if (!body.portraitPrompt) return fail("portraitPrompt is required for a portrait");
     const res = await lanternAiService.sendMessage({
@@ -779,6 +1023,9 @@ export async function POST(req: Request) {
       sessionId: body.sessionId,
       aspectRatio: "1:1",
     });
+    if (body.npcId && res.imageUrl) {
+      await supabaseAdmin().from("lantern_npcs").update({ portrait_url: res.imageUrl }).eq("id", body.npcId);
+    }
     return ok({ imageUrl: res.imageUrl, requestId: res.requestId });
   }
 
@@ -809,7 +1056,7 @@ export async function POST(req: Request) {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/app/api/lantern/npc/route.test.ts`
-Expected: PASS (2 tests).
+Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1638,8 +1885,8 @@ git commit -m "feat: scene + twist panel"
 Create `src/components/lantern/NpcPanel.tsx`:
 ```tsx
 "use client";
-import { useState } from "react";
-import { postJson } from "@/lib/client/api";
+import { useEffect, useRef, useState } from "react";
+import { postJson, patchJson } from "@/lib/client/api";
 
 interface Npc { name: string; trait: string; want: string; voice_hint: string; portrait_prompt: string }
 interface NpcRes { npc: Npc | null; raw?: string; requestId: string }
@@ -1651,10 +1898,11 @@ export function NpcPanel({ campaignId, sessionId }: { campaignId: string; sessio
   const [portraitLoading, setPortraitLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [remembered, setRemembered] = useState(false);
+  const [rememberedId, setRememberedId] = useState<string | null>(null);
+  const patched = useRef(false); // portrait already saved onto the row?
 
   async function newNpc() {
-    setLoading(true); setError(null); setNpc(null); setPortrait(null); setRemembered(false);
+    setLoading(true); setError(null); setNpc(null); setPortrait(null); setRememberedId(null); patched.current = false;
     try {
       const r = await postJson<NpcRes>("/api/lantern/npc", { campaignId, sessionId });
       if (!r.npc) { setError("Could not parse NPC; raw: " + (r.raw ?? "")); return; }
@@ -1663,22 +1911,34 @@ export function NpcPanel({ campaignId, sessionId }: { campaignId: string; sessio
     } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
   }
 
+  // Fire the portrait. After Remember (rememberedId set), pass npcId so the server attaches it too.
   async function firePortrait(prompt: string) {
     setPortraitLoading(true);
     try {
-      const r = await postJson<PortraitRes>("/api/lantern/npc?portrait=1", { sessionId, portraitPrompt: prompt });
+      const r = await postJson<PortraitRes>("/api/lantern/npc?portrait=1", {
+        sessionId, portraitPrompt: prompt, npcId: rememberedId ?? undefined,
+      });
       if (r.imageUrl) setPortrait(r.imageUrl);
     } catch { /* portrait failure is non-fatal: keep the text */ } finally { setPortraitLoading(false); }
   }
 
   async function remember() {
     if (!npc) return;
-    await postJson("/api/lantern/npcs", {
+    const row = await postJson<{ id: string }>("/api/lantern/npcs", {
       campaignId, sessionId, name: npc.name, trait: npc.trait, want: npc.want,
       voice_hint: npc.voice_hint, portrait_url: portrait, starred: true,
     });
-    setRemembered(true);
+    if (portrait) patched.current = true; // portrait was saved by the insert
+    setRememberedId(row.id);
   }
+
+  // Reconcile: if the portrait lands *after* Remember, attach it to the saved row exactly once.
+  useEffect(() => {
+    if (rememberedId && portrait && !patched.current) {
+      patched.current = true;
+      void patchJson("/api/lantern/npcs", { id: rememberedId, portrait_url: portrait });
+    }
+  }, [rememberedId, portrait]);
 
   return (
     <section className="rounded-lg border border-amber-900/15 bg-white p-4">
@@ -1686,14 +1946,16 @@ export function NpcPanel({ campaignId, sessionId }: { campaignId: string; sessio
       {npc ? (
         <div className="flex gap-3">
           <div className="flex h-20 w-20 flex-none items-center justify-center rounded bg-amber-100 text-xs text-amber-900/60">
-            {portrait ? <img src={portrait} alt={npc.name} className="h-20 w-20 rounded object-cover" /> : portraitLoading ? "…" : "no art"}
+            {portrait ? <img src={portrait} alt={npc.name} className="h-20 w-20 rounded object-cover" />
+              : portraitLoading ? "…"
+              : <button onClick={() => firePortrait(npc.portrait_prompt)} className="underline">retry</button>}
           </div>
           <div className="text-sm">
             <p className="font-medium">{npc.name}</p>
             <p className="text-amber-900/70">{npc.trait} · wants {npc.want}</p>
             <p className="italic">“{npc.voice_hint}”</p>
-            <button disabled={remembered} onClick={remember} className="mt-1 rounded border border-amber-700 px-2 py-0.5 text-xs disabled:opacity-50">
-              {remembered ? "⭐ Remembered" : "⭐ Remember"}
+            <button disabled={rememberedId !== null} onClick={remember} className="mt-1 rounded border border-amber-700 px-2 py-0.5 text-xs disabled:opacity-50">
+              {rememberedId ? "⭐ Remembered" : "⭐ Remember"}
             </button>
           </div>
         </div>
@@ -1723,6 +1985,115 @@ git commit -m "feat: npc panel with async portrait + remember"
 
 ---
 
+### Task D: Scuffle persistence route
+
+**Files:**
+- Create: `src/app/api/lantern/scuffle/route.ts`
+- Test: `src/app/api/lantern/scuffle/route.test.ts`
+
+> Requires the `lantern_scuffles` table (Task C) live to work against the DB; the route code +
+> test can be written/committed earlier (the test mocks the DB client).
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/app/api/lantern/scuffle/route.test.ts`:
+```ts
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+const maybeSingle = vi.fn(async () => ({ data: { combatants: [{ id: "m0", name: "Badger", hp: 4, armor: 1 }], turn: 0 }, error: null }));
+const upsert = vi.fn(async () => ({ error: null }));
+vi.mock("@/lib/supabaseAdmin", () => ({
+  supabaseAdmin: () => ({
+    from: () => ({
+      select: () => ({ eq: () => ({ maybeSingle }) }),
+      upsert,
+    }),
+  }),
+}));
+
+import { GET, POST } from "./route";
+
+beforeEach(() => { maybeSingle.mockClear(); upsert.mockClear(); });
+
+describe("scuffle route", () => {
+  it("GET returns the session's scuffle state", async () => {
+    const res = await GET(new Request("http://t/api/lantern/scuffle?sessionId=s1"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ turn: 0 });
+  });
+
+  it("GET 400s without sessionId", async () => {
+    expect((await GET(new Request("http://t/api/lantern/scuffle"))).status).toBe(400);
+  });
+
+  it("POST upserts the state", async () => {
+    const res = await POST(new Request("http://t/api/lantern/scuffle", {
+      method: "POST",
+      body: JSON.stringify({ sessionId: "s1", combatants: [], turn: 2 }),
+    }));
+    expect(res.status).toBe(200);
+    expect(upsert).toHaveBeenCalledOnce();
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/app/api/lantern/scuffle/route.test.ts`
+Expected: FAIL ("Cannot find module './route'").
+
+- [ ] **Step 3: Implement the scuffle route**
+
+Create `src/app/api/lantern/scuffle/route.ts`:
+```ts
+export const runtime = "nodejs";
+
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { ok, fail, readBody } from "@/lib/apiHelpers";
+
+interface Combatant { id: string; name: string; hp: number; armor: number }
+interface UpsertBody { sessionId?: string; combatants?: Combatant[]; turn?: number }
+
+export async function GET(req: Request) {
+  const sessionId = new URL(req.url).searchParams.get("sessionId");
+  if (!sessionId) return fail("sessionId is required");
+  const { data, error } = await supabaseAdmin()
+    .from("lantern_scuffles")
+    .select("combatants, turn")
+    .eq("session_id", sessionId)
+    .maybeSingle();
+  if (error) return fail(error.message, 500);
+  return ok(data ?? { combatants: [], turn: 0 });
+}
+
+export async function POST(req: Request) {
+  const body = await readBody<UpsertBody>(req);
+  if (!body.sessionId) return fail("sessionId is required");
+  const { error } = await supabaseAdmin()
+    .from("lantern_scuffles")
+    .upsert(
+      { session_id: body.sessionId, combatants: body.combatants ?? [], turn: body.turn ?? 0, updated_at: new Date().toISOString() },
+      { onConflict: "session_id" },
+    );
+  if (error) return fail(error.message, 500);
+  return ok({ ok: true });
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run src/app/api/lantern/scuffle/route.test.ts`
+Expected: PASS (3 tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/app/api/lantern/scuffle
+git commit -m "feat: scuffle persistence route (lantern_scuffles upsert)"
+```
+
+---
+
 ### Task 14: NotebookPanel + ScuffleCounter
 
 **Files:**
@@ -1734,9 +2105,10 @@ git commit -m "feat: npc panel with async portrait + remember"
 Create `src/components/lantern/ScuffleCounter.tsx`:
 ```tsx
 "use client";
-import { useState } from "react";
-import { applyDamage, isOut, nextTurn, type Combatant } from "@/lib/scuffle";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { isOut, nextTurn, type Combatant } from "@/lib/scuffle";
 import { soft_monsters, roll } from "@/grounding";
+import { getJson, postJson } from "@/lib/client/api";
 
 let nextId = 0;
 function spawn(): Combatant {
@@ -1744,14 +2116,39 @@ function spawn(): Combatant {
   return { id: `m${nextId++}`, name: m.name, hp: m.hp, armor: m.armor };
 }
 
-export function ScuffleCounter() {
+interface ScuffleState { combatants: Combatant[]; turn: number }
+const cacheKey = (sid: string) => `lantern.scuffle.${sid}`;
+
+export function ScuffleCounter({ sessionId }: { sessionId: string }) {
   const [foes, setFoes] = useState<Combatant[]>([]);
   const [turn, setTurn] = useState(0);
+  const hydrated = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Hydrate: localStorage first (instant), then the DB row as source of truth.
+  useEffect(() => {
+    const cached = window.localStorage.getItem(cacheKey(sessionId));
+    if (cached) {
+      try { const s = JSON.parse(cached) as ScuffleState; setFoes(s.combatants); setTurn(s.turn); } catch { /* ignore */ }
+    }
+    getJson<ScuffleState>(`/api/lantern/scuffle?sessionId=${sessionId}`)
+      .then((s) => { setFoes(s.combatants ?? []); setTurn(s.turn ?? 0); })
+      .catch(() => { /* offline: keep cached state */ })
+      .finally(() => { hydrated.current = true; });
+  }, [sessionId]);
+
+  // Write-through: localStorage immediately + debounced DB upsert (only after hydration).
+  const persist = useCallback((combatants: Combatant[], t: number) => {
+    window.localStorage.setItem(cacheKey(sessionId), JSON.stringify({ combatants, turn: t }));
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      void postJson("/api/lantern/scuffle", { sessionId, combatants, turn: t }).catch(() => {});
+    }, 600);
+  }, [sessionId]);
+
+  useEffect(() => { if (hydrated.current) persist(foes, turn); }, [foes, turn, persist]);
 
   function add() { setFoes((f) => [...f, spawn()]); }
-  function hit(id: string, delta: number) {
-    setFoes((f) => f.map((c) => (c.id === id ? applyDamage(c, c.armor + Math.max(0, delta)) : c)));
-  }
   function bump(id: string, amount: number) {
     setFoes((f) => f.map((c) => (c.id === id ? { ...c, hp: Math.max(0, c.hp + amount) } : c)));
   }
@@ -1797,7 +2194,7 @@ const THREAD_KIND: Record<Exclude<Tab, "People">, "place" | "problem" | "treasur
 interface Npc { id: string; name: string; want: string | null; starred: boolean }
 interface Thread { id: string; kind: string; title: string; detail: string | null; starred: boolean }
 
-export function NotebookPanel({ campaignId }: { campaignId: string }) {
+export function NotebookPanel({ campaignId, sessionId }: { campaignId: string; sessionId: string }) {
   const [tab, setTab] = useState<Tab>("People");
   const [npcs, setNpcs] = useState<Npc[]>([]);
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -1852,7 +2249,7 @@ export function NotebookPanel({ campaignId }: { campaignId: string }) {
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`Add ${tab}`} className="flex-1 rounded border border-amber-900/30 px-2 py-1 text-sm" />
         <button onClick={addEntry} className="rounded border border-amber-700 px-2 text-sm">+ add</button>
       </div>
-      <ScuffleCounter />
+      <ScuffleCounter sessionId={sessionId} />
     </section>
   );
 }
@@ -1867,7 +2264,7 @@ Expected: no errors.
 
 ```bash
 git add src/components/lantern/ScuffleCounter.tsx src/components/lantern/NotebookPanel.tsx
-git commit -m "feat: notebook panel (people/places/...) + local scuffle counter"
+git commit -m "feat: notebook panel (people/places/...) + persisted scuffle counter"
 ```
 
 ---
@@ -2039,7 +2436,7 @@ export default function Home() {
         <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2">
           <ScenePanel campaignId={campaign.id} sessionId={sessionId} />
           <NpcPanel campaignId={campaign.id} sessionId={sessionId} />
-          <NotebookPanel campaignId={campaign.id} />
+          <NotebookPanel campaignId={campaign.id} sessionId={sessionId} />
           <RecapPanel campaignId={campaign.id} sessionId={sessionId} />
         </div>
       )}
@@ -2147,9 +2544,11 @@ Run: `npm run dev` and open `http://localhost:3000`.
 
 - [ ] **Step 2: Walk the campaign lifecycle**
 
-In the UI, in order: Start campaign → Start session → New Scene (reads naturally) →
-Twist (concrete development) → New NPC (text instant, portrait fills in after ~20–40s) →
-⭐ Remember the NPC → add a starred Place in the notebook → New Scene again and confirm the
+In the UI, in order: log in with `LANTERN_PASSWORD` → Start campaign → Start session →
+New Scene (reads naturally) → Twist (concrete development) → New NPC (text instant, portrait
+fills in after ~20–40s; try ⭐ Remember *before* the portrait lands and confirm it still
+attaches) → add a starred Place in the notebook → add foes to the scuffle, damage one, then
+refresh the page and confirm the scuffle state survives → New Scene again and confirm the
 output references a remembered thread → Generate Recap (reflects the events) →
 Edit Memory → Summarize recent events → edit → Save.
 
@@ -2183,18 +2582,20 @@ whose output didn't read naturally or didn't use a remembered thread before rely
 ## Self-Review notes
 
 **Spec coverage (Lantern design spec → tasks):**
+- Single-password middleware gate over page + `/api` (public URL fronts the service-role key) → Task B.
+- Text-model fallback `google/gemini-2.5-flash-lite` → Task A.
 - Campaign/session gate + bar (`localStorage` resume) → Tasks 9, 11, 16.
 - Panel ① Scene + Twist (each logs an event) → Tasks 4, 5, 12.
-- Panel ② NPC text-immediate + async portrait + ⭐ Remember → Tasks 6, 7, 13.
-- Panel ③ Notebook (People/Places/Problems/Treasures/Notes, star, add) + local scuffle counter → Tasks 7, 10, 14.
+- Panel ② NPC text-immediate + order-independent async portrait (optional `npcId`, client reconciliation, self-healing retry) + ⭐ Remember → Tasks 6, 7, 13.
+- Panel ③ Notebook (People/Places/Problems/Treasures/Notes, star, add) + persisted scuffle counter (localStorage + `lantern_scuffles`) → Tasks 7, 10, 14, C, D.
 - Panel ④ Recap + Edit Memory with AI summarize → Tasks 8, 15.
 - AI routes assemble system + injected memory + grounding rolls + task and log to `lantern_events` with `request_id` → Tasks 2, 4–8.
 - `session_id` + cost/token land in top-level `ai_provider_requests` columns → covered by the foundation's `aiProviderLog` (verified live in Task 18).
-- Error handling: friendly inline + retry (panels); twist/npc JSON parse-fallback (Tasks 5, 6); portrait failure non-fatal (Task 13); DB-logging failure non-fatal (foundation `writeEvent`).
+- Error handling: friendly inline + retry (panels); twist/npc JSON parse-fallback (Tasks 5, 6); portrait failure non-fatal + retry (Task 13); DB-logging failure non-fatal (foundation `writeEvent`).
 - Cairn attribution (`CREDITS.md` + footer) → Task 17.
-- Testing: unit (parse, context, routes, scuffle, hook) + manual lifecycle checklist → Tasks 1–10, 18.
+- Testing: unit (parse, context, routes, scuffle math + route, hook) + manual lifecycle checklist → Tasks 1–10, D, 18.
 
-**Deferred / explicitly out of scope (matches spec non-goals):** no VTT/maps, no player UI, no auth, no character sheets, no full combat engine, scuffle state not persisted.
+**Deferred / explicitly out of scope (matches spec non-goals):** no VTT/maps, no player UI, no per-user accounts (single shared password only), no character sheets, no full combat engine.
 
 **Type consistency check:**
 - `lanternAiService.sendMessage` input/output used in routes exactly matches the foundation interface (`{ useCase, systemPrompt, question, sessionId, aspectRatio? }` → `{ text?, imageUrl?, model, provider, requestId }`).
@@ -2204,6 +2605,8 @@ whose output didn't read naturally or didn't use a remembered thread before rely
 - Route response shapes (`{ text, requestId }`, `{ twist, raw, requestId }`, `{ npc, raw, requestId }`, `{ imageUrl, requestId }`, `{ proposedSummary, requestId }`) match what each panel destructures.
 
 **Notes for the executor:**
+- Run Tasks A–C first. Task C's `supabase db push` is **operator-gated** (production schema change); the scuffle route (D) and the DB half of Task 14 only work once `lantern_scuffles` is live, but their code + tests can land earlier (the DB client is mocked in tests). The localStorage half of the scuffle counter works without the table.
+- The middleware gate stores the password in an httpOnly cookie compared against `LANTERN_PASSWORD` — a deliberate single-operator simplification, not per-user auth. It must keep covering `/api/*` (those routes front the service-role key).
 - All route handlers set `export const runtime = "nodejs"` (service-role client + node libs; not edge).
 - `Math.random` in `roll`/`rollN` is fine here (app code, not a workflow script).
 - The Vitest environment flips to `jsdom` in Task 9; re-run `npm test` there to confirm node-style route tests still pass under jsdom (they do — they don't touch the DOM).
