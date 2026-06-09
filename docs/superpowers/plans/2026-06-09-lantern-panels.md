@@ -821,8 +821,12 @@ Create `src/app/api/lantern/twist/route.test.ts`:
 ```ts
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const sendMessage = vi.fn();
-const writeEvent = vi.fn(async () => undefined);
+// vitest hoists vi.mock() above top-level consts, so mock fns referenced directly in a
+// factory must be created inside vi.hoisted() to avoid a TDZ ReferenceError.
+const { sendMessage, writeEvent } = vi.hoisted(() => ({
+  sendMessage: vi.fn(),
+  writeEvent: vi.fn(async () => undefined),
+}));
 vi.mock("@/services/lanternAiService", () => ({ lanternAiService: { sendMessage } }));
 vi.mock("@/lib/lanternEvents", () => ({ writeEvent }));
 vi.mock("@/lib/campaignRepo", () => ({
@@ -931,9 +935,12 @@ Create `src/app/api/lantern/npc/route.test.ts`:
 ```ts
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const sendMessage = vi.fn();
-const writeEvent = vi.fn(async () => undefined);
-const npcUpdate = vi.fn(() => ({ eq: async () => ({ error: null }) }));
+// vi.hoisted() so the mock fns exist before the hoisted vi.mock() factories run (avoids TDZ).
+const { sendMessage, writeEvent, npcUpdate } = vi.hoisted(() => ({
+  sendMessage: vi.fn(),
+  writeEvent: vi.fn(async () => undefined),
+  npcUpdate: vi.fn(() => ({ eq: async () => ({ error: null }) })),
+}));
 vi.mock("@/services/lanternAiService", () => ({ lanternAiService: { sendMessage } }));
 vi.mock("@/lib/lanternEvents", () => ({ writeEvent }));
 vi.mock("@/lib/supabaseAdmin", () => ({ supabaseAdmin: () => ({ from: () => ({ update: npcUpdate }) }) }));
@@ -1292,9 +1299,12 @@ Create `src/app/api/lantern/recap/route.test.ts`:
 ```ts
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const sendMessage = vi.fn(async () => ({ text: "Previously, in the Wood…", requestId: "r1", model: "m", provider: "p" }));
-const writeEvent = vi.fn(async () => undefined);
-const recentEventSummaries = vi.fn(async () => ["Met a fox", "Crossed the bridge"]);
+// vi.hoisted() so the mock fns exist before the hoisted vi.mock() factories run (avoids TDZ).
+const { sendMessage, writeEvent, recentEventSummaries } = vi.hoisted(() => ({
+  sendMessage: vi.fn(async () => ({ text: "Previously, in the Wood…", requestId: "r1", model: "m", provider: "p" })),
+  writeEvent: vi.fn(async () => undefined),
+  recentEventSummaries: vi.fn(async () => ["Met a fox", "Crossed the bridge"]),
+}));
 vi.mock("@/services/lanternAiService", () => ({ lanternAiService: { sendMessage } }));
 vi.mock("@/lib/lanternEvents", () => ({ writeEvent }));
 vi.mock("@/lib/campaignRepo", () => ({
