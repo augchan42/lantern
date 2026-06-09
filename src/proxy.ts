@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 
 const COOKIE = "lantern_auth";
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   // Let the login page + its endpoint through (everything else is gated).
   if (pathname.startsWith("/login") || pathname.startsWith("/api/login")) {
