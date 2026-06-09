@@ -52,7 +52,7 @@
 - `CREDITS.md` — Cairn 2e CC-BY-SA attribution.
 
 **New auth / persistence files (2026-06-09 decisions)**
-- `src/middleware.ts`, `src/app/login/page.tsx`, `src/app/api/login/route.ts` — password gate.
+- `src/proxy.ts`, `src/app/login/page.tsx`, `src/app/api/login/route.ts` — password gate.
 - `src/app/api/lantern/scuffle/route.ts` — GET + upsert `lantern_scuffles`.
 - `../platform-db/supabase/migrations/<ts>_lantern_scuffles.sql` — the scuffle table (gated push).
 
@@ -98,7 +98,7 @@ git commit -m "feat: use google/gemini-2.5-flash-lite as text-model fallback"
 ### Task B: Single-password middleware gate
 
 **Files:**
-- Create: `src/middleware.ts`
+- Create: `src/proxy.ts`  (Next 16's proxy file convention — the renamed `middleware`)
 - Create: `src/app/login/page.tsx`
 - Create: `src/app/api/login/route.ts`
 - Modify: `.env.local.example` (add `LANTERN_PASSWORD=`)
@@ -119,14 +119,14 @@ Then set a real value in `.env.local` (not committed).
 
 - [ ] **Step 2: Implement the middleware**
 
-Create `src/middleware.ts`:
+Create `src/proxy.ts` (Next 16 renamed `middleware` → `proxy`; the file must export a function named `proxy` or a default export):
 ```ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 const COOKIE = "lantern_auth";
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   // Let the login page + its endpoint through (everything else is gated).
   if (pathname.startsWith("/login") || pathname.startsWith("/api/login")) {
@@ -227,7 +227,7 @@ returns `401` without the cookie.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/middleware.ts src/app/login src/app/api/login .env.local.example
+git add src/proxy.ts src/app/login src/app/api/login .env.local.example
 git commit -m "feat: single-password middleware auth gate over page + api"
 ```
 
