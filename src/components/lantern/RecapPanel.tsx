@@ -19,7 +19,7 @@ export function RecapPanel({ campaignId, sessionId }: { campaignId: string; sess
 
   return (
     <section className="rounded-lg border border-amber-900/15 bg-white p-4">
-      <h2 className="mb-2 font-semibold">④ Session Recap</h2>
+      <h2 className="mb-2 font-display text-lg font-semibold text-amber-900">④ Session Recap</h2>
       <div className="min-h-16 rounded bg-amber-50 p-3 text-sm">{recap ?? "“Previously, in the Wood…”"}</div>
       <button disabled={loading} onClick={generate} className="mt-2 rounded bg-amber-700 px-3 py-1 text-sm text-white disabled:opacity-50">
         {loading ? "…" : "Generate Recap"}

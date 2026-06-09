@@ -58,7 +58,7 @@ export function NpcPanel({ campaignId, sessionId }: { campaignId: string; sessio
 
   return (
     <section className="rounded-lg border border-amber-900/15 bg-white p-4">
-      <h2 className="mb-2 font-semibold">② NPC Generator</h2>
+      <h2 className="mb-2 font-display text-lg font-semibold text-amber-900">② NPC Generator</h2>
       {npc ? (
         <div className="flex gap-3">
           <div className="flex h-20 w-20 flex-none items-center justify-center rounded bg-amber-100 text-xs text-amber-900/60">

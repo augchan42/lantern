@@ -1,8 +1,17 @@
 @import "tailwindcss";
 
+/*
+ * Lantern — "lantern-lit parchment" theme.
+ * The whole app is a warm, light, cozy interface. We lock the light theme on
+ * purpose: every panel uses cream/amber surfaces, so a prefers-color-scheme
+ * dark invert (the old Next.js starter default) only flipped inherited text to
+ * near-white on cream and made it illegible. If real dark mode is ever wanted,
+ * it needs per-component dark: variants, not a body-level color swap.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #faf3e3; /* warm parchment */
+  --foreground: #2c2117; /* deep cocoa ink — high contrast on cream */
+  --ember: #b45309; /* amber-700, the lantern glow accent */
 }
 
 @theme inline {
@@ -10,17 +19,22 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-display: var(--font-fraunces);
 }
 
 body {
-  background: var(--background);
+  /* Layered warm glow: a soft lantern halo at top, settling into parchment. */
+  background-color: var(--background);
+  background-image:
+    radial-gradient(120% 80% at 50% -10%, rgba(245, 200, 130, 0.45), transparent 60%),
+    radial-gradient(80% 50% at 100% 0%, rgba(180, 83, 9, 0.07), transparent 70%);
+  background-attachment: fixed;
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+/* Distinctive display face for the masthead and panel headings. */
+.font-display {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-optical-sizing: auto;
 }

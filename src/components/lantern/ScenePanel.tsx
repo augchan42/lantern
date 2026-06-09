@@ -31,7 +31,7 @@ export function ScenePanel({ campaignId, sessionId }: { campaignId: string; sess
 
   return (
     <section className="rounded-lg border border-amber-900/15 bg-white p-4">
-      <h2 className="mb-2 font-semibold">① Scene + Twist</h2>
+      <h2 className="mb-2 font-display text-lg font-semibold text-amber-900">① Scene + Twist</h2>
       <div className="min-h-16 rounded bg-amber-50 p-3 text-sm">{scene ?? "Generate a scene to begin."}</div>
       <label className="mt-2 block text-xs text-amber-900/70">Warden note</label>
       <input value={note} onChange={(e) => setNote(e.target.value)} className="w-full rounded border border-amber-900/30 px-2 py-1 text-sm" />

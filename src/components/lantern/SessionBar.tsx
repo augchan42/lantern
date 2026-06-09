@@ -50,8 +50,8 @@ export function SessionBar(props: {
 
   if (!campaign) {
     return (
-      <header className="flex items-center gap-3 border-b border-amber-900/20 bg-amber-50/60 px-4 py-3">
-        <span className="text-lg">🏮 Lantern</span>
+      <header className="flex items-center gap-3 border-b border-amber-900/20 bg-amber-50/70 px-4 py-3 backdrop-blur-sm">
+        <span className="font-display text-xl font-semibold tracking-tight text-amber-900">🏮 Lantern</span>
         <input
           className="rounded border border-amber-900/30 px-2 py-1 text-sm"
           placeholder="Campaign name"
@@ -66,8 +66,8 @@ export function SessionBar(props: {
   }
 
   return (
-    <header className="flex flex-wrap items-center gap-3 border-b border-amber-900/20 bg-amber-50/60 px-4 py-3 text-sm">
-      <span className="text-lg">🏮 Lantern</span>
+    <header className="flex flex-wrap items-center gap-3 border-b border-amber-900/20 bg-amber-50/70 px-4 py-3 text-sm backdrop-blur-sm">
+      <span className="font-display text-xl font-semibold tracking-tight text-amber-900">🏮 Lantern</span>
       <span className="font-medium">Campaign: {campaign.title ?? "Untitled"}</span>
       <label className="flex items-center gap-1">
         tone:

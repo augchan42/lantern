@@ -38,7 +38,7 @@ export function NotebookPanel({ campaignId, sessionId }: { campaignId: string; s
 
   return (
     <section className="rounded-lg border border-amber-900/15 bg-white p-4">
-      <h2 className="mb-2 font-semibold">③ Notes &amp; Threads</h2>
+      <h2 className="mb-2 font-display text-lg font-semibold text-amber-900">③ Notes &amp; Threads</h2>
       <div className="mb-2 flex flex-wrap gap-1 text-xs">
         {(["People", "Places", "Problems", "Treasures", "Notes"] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)} className={`rounded px-2 py-0.5 ${tab === t ? "bg-amber-700 text-white" : "border border-amber-900/30"}`}>
