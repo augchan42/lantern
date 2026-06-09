@@ -17,6 +17,15 @@ export async function POST(req: Request) {
   return ok(data);
 }
 
+export async function GET(req: Request) {
+  const id = new URL(req.url).searchParams.get("id");
+  if (!id) return fail("id is required");
+  const { data, error } = await supabaseAdmin().from("lantern_campaigns").select("*").eq("id", id).single();
+  if (error) return fail(error.message, 500);
+  if (!data) return fail("campaign not found", 404);
+  return ok(data);
+}
+
 export async function PATCH(req: Request) {
   const body = await readBody<PatchBody>(req);
   if (!body.id) return fail("id is required");
