@@ -2124,10 +2124,11 @@ import { isOut, nextTurn, type Combatant } from "@/lib/scuffle";
 import { soft_monsters, roll } from "@/grounding";
 import { getJson, postJson } from "@/lib/client/api";
 
-let nextId = 0;
 function spawn(): Combatant {
   const m = roll(soft_monsters);
-  return { id: `m${nextId++}`, name: m.name, hp: m.hp, armor: m.armor };
+  // crypto.randomUUID() (not a module counter) so ids don't collide with combatants
+  // hydrated from localStorage/DB after a reload.
+  return { id: crypto.randomUUID(), name: m.name, hp: m.hp, armor: m.armor };
 }
 
 interface ScuffleState { combatants: Combatant[]; turn: number }
@@ -2475,7 +2476,7 @@ In `src/app/api/lantern/campaign/route.ts`, add:
 export async function GET(req: Request) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return fail("id is required");
-  const { data, error } = await supabaseAdmin().from("lantern_campaigns").select("*").eq("id", id).single();
+  const { data, error } = await supabaseAdmin().from("lantern_campaigns").select("*").eq("id", id).maybeSingle();
   if (error) return fail(error.message, 500);
   if (!data) return fail("campaign not found", 404);
   return ok(data);
