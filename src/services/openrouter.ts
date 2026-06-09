@@ -12,7 +12,7 @@ const OPENROUTER_HEADERS = {
 // Default model chain for Lantern.
 const DEFAULT_MODELS = [
   "deepseek/deepseek-v4-flash",
-  "deepseek/deepseek-chat-v3.1",
+  "google/gemini-2.5-flash-lite",
 ];
 
 const MODEL_TIMEOUT_MS = 55_000;

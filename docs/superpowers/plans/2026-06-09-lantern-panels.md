@@ -52,7 +52,7 @@
 - `CREDITS.md` — Cairn 2e CC-BY-SA attribution.
 
 **New auth / persistence files (2026-06-09 decisions)**
-- `src/middleware.ts`, `src/app/login/page.tsx`, `src/app/api/login/route.ts` — password gate.
+- `src/proxy.ts`, `src/app/login/page.tsx`, `src/app/api/login/route.ts` — password gate.
 - `src/app/api/lantern/scuffle/route.ts` — GET + upsert `lantern_scuffles`.
 - `../platform-db/supabase/migrations/<ts>_lantern_scuffles.sql` — the scuffle table (gated push).
 
@@ -98,7 +98,7 @@ git commit -m "feat: use google/gemini-2.5-flash-lite as text-model fallback"
 ### Task B: Single-password middleware gate
 
 **Files:**
-- Create: `src/middleware.ts`
+- Create: `src/proxy.ts`  (Next 16's proxy file convention — the renamed `middleware`)
 - Create: `src/app/login/page.tsx`
 - Create: `src/app/api/login/route.ts`
 - Modify: `.env.local.example` (add `LANTERN_PASSWORD=`)
@@ -119,14 +119,14 @@ Then set a real value in `.env.local` (not committed).
 
 - [ ] **Step 2: Implement the middleware**
 
-Create `src/middleware.ts`:
+Create `src/proxy.ts` (Next 16 renamed `middleware` → `proxy`; the file must export a function named `proxy` or a default export):
 ```ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 const COOKIE = "lantern_auth";
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   // Let the login page + its endpoint through (everything else is gated).
   if (pathname.startsWith("/login") || pathname.startsWith("/api/login")) {
@@ -227,7 +227,7 @@ returns `401` without the cookie.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/middleware.ts src/app/login src/app/api/login .env.local.example
+git add src/proxy.ts src/app/login src/app/api/login .env.local.example
 git commit -m "feat: single-password middleware auth gate over page + api"
 ```
 
@@ -707,11 +707,15 @@ Create `src/app/api/lantern/scene/route.test.ts`:
 ```ts
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const sendMessage = vi.fn(async () => ({ text: "A misty glade.", model: "m", provider: "p", requestId: "r1" }));
-const writeEvent = vi.fn(async () => undefined);
-const assembleContext = vi.fn(async () => ({
-  campaign: { id: "c1", title: null, tone: "gentle", summary: "", status: "active" },
-  systemPrompt: "SYS",
+// vi.hoisted() so the mock fns exist before the hoisted vi.mock() factories run (avoids TDZ).
+// sendMessage takes a typed arg so `.mock.calls[0][0]` type-checks under `tsc`.
+const { sendMessage, writeEvent, assembleContext } = vi.hoisted(() => ({
+  sendMessage: vi.fn(async (_input?: unknown) => ({ text: "A misty glade.", model: "m", provider: "p", requestId: "r1" })),
+  writeEvent: vi.fn(async () => undefined),
+  assembleContext: vi.fn(async () => ({
+    campaign: { id: "c1", title: null, tone: "gentle", summary: "", status: "active" },
+    systemPrompt: "SYS",
+  })),
 }));
 vi.mock("@/services/lanternAiService", () => ({ lanternAiService: { sendMessage } }));
 vi.mock("@/lib/lanternEvents", () => ({ writeEvent }));
@@ -821,8 +825,12 @@ Create `src/app/api/lantern/twist/route.test.ts`:
 ```ts
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const sendMessage = vi.fn();
-const writeEvent = vi.fn(async () => undefined);
+// vitest hoists vi.mock() above top-level consts, so mock fns referenced directly in a
+// factory must be created inside vi.hoisted() to avoid a TDZ ReferenceError.
+const { sendMessage, writeEvent } = vi.hoisted(() => ({
+  sendMessage: vi.fn(),
+  writeEvent: vi.fn(async () => undefined),
+}));
 vi.mock("@/services/lanternAiService", () => ({ lanternAiService: { sendMessage } }));
 vi.mock("@/lib/lanternEvents", () => ({ writeEvent }));
 vi.mock("@/lib/campaignRepo", () => ({
@@ -931,9 +939,12 @@ Create `src/app/api/lantern/npc/route.test.ts`:
 ```ts
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const sendMessage = vi.fn();
-const writeEvent = vi.fn(async () => undefined);
-const npcUpdate = vi.fn(() => ({ eq: async () => ({ error: null }) }));
+// vi.hoisted() so the mock fns exist before the hoisted vi.mock() factories run (avoids TDZ).
+const { sendMessage, writeEvent, npcUpdate } = vi.hoisted(() => ({
+  sendMessage: vi.fn(),
+  writeEvent: vi.fn(async () => undefined),
+  npcUpdate: vi.fn(() => ({ eq: async () => ({ error: null }) })),
+}));
 vi.mock("@/services/lanternAiService", () => ({ lanternAiService: { sendMessage } }));
 vi.mock("@/lib/lanternEvents", () => ({ writeEvent }));
 vi.mock("@/lib/supabaseAdmin", () => ({ supabaseAdmin: () => ({ from: () => ({ update: npcUpdate }) }) }));
@@ -1292,9 +1303,12 @@ Create `src/app/api/lantern/recap/route.test.ts`:
 ```ts
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const sendMessage = vi.fn(async () => ({ text: "Previously, in the Wood…", requestId: "r1", model: "m", provider: "p" }));
-const writeEvent = vi.fn(async () => undefined);
-const recentEventSummaries = vi.fn(async () => ["Met a fox", "Crossed the bridge"]);
+// vi.hoisted() so the mock fns exist before the hoisted vi.mock() factories run (avoids TDZ).
+const { sendMessage, writeEvent, recentEventSummaries } = vi.hoisted(() => ({
+  sendMessage: vi.fn(async () => ({ text: "Previously, in the Wood…", requestId: "r1", model: "m", provider: "p" })),
+  writeEvent: vi.fn(async () => undefined),
+  recentEventSummaries: vi.fn(async () => ["Met a fox", "Crossed the bridge"]),
+}));
 vi.mock("@/services/lanternAiService", () => ({ lanternAiService: { sendMessage } }));
 vi.mock("@/lib/lanternEvents", () => ({ writeEvent }));
 vi.mock("@/lib/campaignRepo", () => ({
@@ -2110,10 +2124,11 @@ import { isOut, nextTurn, type Combatant } from "@/lib/scuffle";
 import { soft_monsters, roll } from "@/grounding";
 import { getJson, postJson } from "@/lib/client/api";
 
-let nextId = 0;
 function spawn(): Combatant {
   const m = roll(soft_monsters);
-  return { id: `m${nextId++}`, name: m.name, hp: m.hp, armor: m.armor };
+  // crypto.randomUUID() (not a module counter) so ids don't collide with combatants
+  // hydrated from localStorage/DB after a reload.
+  return { id: crypto.randomUUID(), name: m.name, hp: m.hp, armor: m.armor };
 }
 
 interface ScuffleState { combatants: Combatant[]; turn: number }
@@ -2461,7 +2476,7 @@ In `src/app/api/lantern/campaign/route.ts`, add:
 export async function GET(req: Request) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return fail("id is required");
-  const { data, error } = await supabaseAdmin().from("lantern_campaigns").select("*").eq("id", id).single();
+  const { data, error } = await supabaseAdmin().from("lantern_campaigns").select("*").eq("id", id).maybeSingle();
   if (error) return fail(error.message, 500);
   if (!data) return fail("campaign not found", 404);
   return ok(data);

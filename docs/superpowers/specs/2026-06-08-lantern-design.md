@@ -369,7 +369,7 @@ are client components that POST to them. The service-role Supabase client handle
 
 ```
 src/
-  middleware.ts                       # password gate: LANTERN_PASSWORD cookie over page + /api
+  proxy.ts                            # password gate (Next 16 proxy): LANTERN_PASSWORD cookie over page + /api
   app/
     login/page.tsx                    # password form (posts to /api/login)
     page.tsx                          # campaign/session gate + 2×2 panel grid

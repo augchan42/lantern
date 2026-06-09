@@ -5,11 +5,11 @@ directory map, and related repos.
 
 ## What this repo is right now
 
-Lantern app — **foundation implemented, panels pending.** The core is built and tested
+Lantern app — **foundation implemented, panels implemented; first play-test pending.** The core is built and tested
 (env config, service-role DB client, grounding tables, prompt assembly, AI service, event
 writer). The DB schema (`lantern_*` tables + `ai_provider_requests` columns) is live in
-the shared Supabase project. The remaining UI panels, API routes, and campaign/session
-gate are tracked in a follow-on plan.
+the shared Supabase project. The UI panels, API routes, and campaign/session gate are also
+built and tested.
 
 ## Authoritative files & boundaries
 

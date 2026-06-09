@@ -5,10 +5,11 @@ Cairn 2e engine) with kids ~9–12. It is a back-pocket idea machine **and campa
 for the Warden — it does not run the game, narrate to players, or expose any player-facing
 UI. See the design spec for the full picture.
 
-> **Status:** foundation built, UI panels pending. The core (env, DB client, grounding
-> tables, prompts, AI service, event writer) is implemented and tested. The DB schema
-> (`lantern_*` tables + `ai_provider_requests` columns) is live in the shared Supabase
-> project `ezlyfsgpcahlnbqgdlxh`. See `docs/superpowers/` for specs and plans.
+> **Status:** foundation + panels built; first play-test pending. The core (env, DB client,
+> grounding tables, prompts, AI service, event writer) is implemented and tested; the UI
+> panels, routes, and campaign/session gate are also built. The DB schema (`lantern_*`
+> tables + `ai_provider_requests` columns) is live in the shared Supabase project
+> `ezlyfsgpcahlnbqgdlxh`. See `docs/superpowers/` for specs and plans.
 
 ## Repository layout
 
